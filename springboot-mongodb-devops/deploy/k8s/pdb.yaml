@@ -1,0 +1,26 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: springboot-mongodb-app-pdb
+  namespace: devops-microservice
+  labels:
+    app: springboot-mongodb-app
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: springboot-mongodb-app
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mongodb-pdb
+  namespace: devops-microservice
+  labels:
+    app: mongodb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: mongodb
+---

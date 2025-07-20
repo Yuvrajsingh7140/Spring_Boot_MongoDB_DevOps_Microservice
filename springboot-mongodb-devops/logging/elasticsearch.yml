@@ -1,0 +1,24 @@
+cluster.name: "devops-elasticsearch-cluster"
+network.host: 0.0.0.0
+discovery.type: single-node
+
+# Memory settings
+bootstrap.memory_lock: false
+ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+
+# Index settings
+action.auto_create_index: true
+action.destructive_requires_name: true
+
+# Security settings (disabled for simplicity)
+xpack.security.enabled: false
+xpack.monitoring.collection.enabled: true
+
+# Performance settings
+thread_pool.write.queue_size: 10000
+indices.memory.index_buffer_size: 20%
+indices.queries.cache.size: 40%
+
+# Index lifecycle management
+indices.lifecycle.rollover.alias: "application-logs"
+indices.lifecycle.poll_interval: "1m"

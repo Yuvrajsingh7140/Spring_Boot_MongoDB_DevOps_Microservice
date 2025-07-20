@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: devops-microservice
+  labels:
+    app: springboot-mongodb-app
+data:
+  SPRING_PROFILES_ACTIVE: "k8s"
+  MONGO_DATABASE: "devops_db"
+  MONGO_AUTH_DB: "admin"
+  LOGGING_LEVEL_ROOT: "INFO"
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,metrics,prometheus"
+---

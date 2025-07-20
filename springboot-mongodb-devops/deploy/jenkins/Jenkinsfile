@@ -1,0 +1,171 @@
+pipeline {
+    agent {
+        kubernetes {
+            yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    jenkins: slave
+spec:
+  containers:
+  - name: maven
+    image: maven:3.9.6-openjdk-17
+    command: ['cat']
+    tty: true
+    volumeMounts:
+    - name: docker-sock
+      mountPath: /var/run/docker.sock
+  - name: docker
+    image: docker:24-dind
+    command: ['cat']
+    tty: true
+    volumeMounts:
+    - name: docker-sock
+      mountPath: /var/run/docker.sock
+    securityContext:
+      privileged: true
+  - name: kubectl
+    image: bitnami/kubectl:latest
+    command: ['cat']
+    tty: true
+  - name: sonar
+    image: sonarsource/sonar-scanner-cli:latest
+    command: ['cat']
+    tty: true
+  volumes:
+  - name: docker-sock
+    hostPath:
+      path: /var/run/docker.sock
+"""
+        }
+    }
+
+    environment {
+        AWS_REGION = 'us-west-2'
+        ECR_REPOSITORY = "${ECR_REPOSITORY_URI}"
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        KUBECONFIG = '/tmp/kubeconfig'
+        SONAR_PROJECT_KEY = 'springboot-mongodb-devops'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build & Test') {
+            parallel {
+                stage('Maven Build') {
+                    steps {
+                        container('maven') {
+                            sh '''
+                                cd app
+                                mvn clean compile
+                                mvn test
+                                mvn package -DskipTests
+                            '''
+                        }
+                    }
+                    post {
+                        always {
+                            publishTestResults testResultsPattern: 'app/target/surefire-reports/*.xml'
+                        }
+                    }
+                }
+
+                stage('Security Scan') {
+                    steps {
+                        container('maven') {
+                            sh '''
+                                cd app
+                                mvn org.owasp:dependency-check-maven:check
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Code Quality Analysis') {
+            steps {
+                container('sonar') {
+                    withSonarQubeEnv('SonarQube') {
+                        sh '''
+                            cd app
+                            sonar-scanner
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                container('docker') {
+                    script {
+                        sh '''
+                            cd app
+                            docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+                            docker build -t $ECR_REPOSITORY:latest .
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                container('docker') {
+                    sh '''
+                        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY
+                        docker push $ECR_REPOSITORY:$IMAGE_TAG
+                        docker push $ECR_REPOSITORY:latest
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                }
+            }
+            steps {
+                container('kubectl') {
+                    script {
+                        sh '''
+                            aws eks update-kubeconfig --region $AWS_REGION --name devops-eks-cluster
+                            kubectl set image deployment/springboot-mongodb-app app=$ECR_REPOSITORY:$IMAGE_TAG -n devops-microservice
+                            kubectl rollout status deployment/springboot-mongodb-app -n devops-microservice --timeout=300s
+                        '''
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            container('docker') {
+                sh '''
+                    docker rmi $ECR_REPOSITORY:$IMAGE_TAG || true
+                    docker rmi $ECR_REPOSITORY:latest || true
+                    docker system prune -f
+                '''
+            }
+        }
+
+        success {
+            echo "Build completed successfully!"
+        }
+
+        failure {
+            echo "Build failed!"
+        }
+    }
+}

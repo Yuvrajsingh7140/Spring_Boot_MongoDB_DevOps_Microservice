@@ -1,0 +1,28 @@
+server.name: kibana
+server.host: "0.0.0.0"
+elasticsearch.hosts: ["http://elasticsearch:9200"]
+monitoring.ui.container.elasticsearch.enabled: true
+elasticsearch.requestTimeout: 30000
+
+# Index patterns
+kibana.index: ".kibana"
+kibana.defaultAppId: "discover"
+
+# Logging
+logging.dest: stdout
+logging.silent: false
+logging.quiet: false
+logging.verbose: false
+
+# Security (disabled)
+xpack.security.enabled: false
+
+# Default index pattern
+kibana.defaultIndex: "application-logs-*"
+
+# Visualization settings
+visualization.colorMapping:
+  ERROR: "#E74C3C"
+  WARN: "#F39C12" 
+  INFO: "#3498DB"
+  DEBUG: "#95A5A6"
