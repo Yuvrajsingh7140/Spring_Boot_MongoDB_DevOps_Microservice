@@ -1,0 +1,129 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  AWS_REGION: us-west-2
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_URI }}
+  SONAR_PROJECT_KEY: springboot-mongodb-devops
+  SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    services:
+      docker:
+        image: docker:24-dind
+        options: --privileged
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Build with Maven
+      run: |
+        cd app
+        mvn clean compile
+        mvn test
+        mvn package -DskipTests
+
+    - name: Publish Test Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: app/target/surefire-reports/
+
+    - name: OWASP Dependency Check
+      uses: dependency-check/Dependency-Check_Action@v2.0.2
+      with:
+        project: springboot-mongodb-devops
+        scanPath: ./app
+
+  sonar-analysis:
+    needs: build-test
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: SonarQube Scan
+      run: |
+        cd app
+        sonar-scanner \
+          -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }} \
+          -Dsonar.host.url=${{ env.SONAR_HOST_URL }} \
+          -Dsonar.login=${{ env.SONAR_TOKEN }}
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  docker-build-push:
+    needs: build-test
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build and Push Docker image
+      run: |
+        cd app
+        docker build -t $ECR_REPOSITORY:${{ github.run_number }} .
+        docker tag $ECR_REPOSITORY:${{ github.run_number }} $ECR_REPOSITORY:latest
+        docker push $ECR_REPOSITORY:${{ github.run_number }}
+        docker push $ECR_REPOSITORY:latest
+
+  deploy:
+    needs: docker-build-push
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Update kubeconfig
+      run: aws eks update-kubeconfig --region $AWS_REGION --name devops-eks-cluster
+
+    - name: Set image and rollout
+      run: |
+        kubectl set image deployment/springboot-mongodb-app app=$ECR_REPOSITORY:${{ github.run_number }} -n devops-microservice
+        kubectl rollout status deployment/springboot-mongodb-app -n devops-microservice --timeout=300s
+
+  cleanup:
+    if: always()
+    runs-on: ubuntu-latest
+    needs: [docker-build-push, deploy]
+    steps:
+    - name: Cleanup Docker Images
+      run: |
+        docker rmi $ECR_REPOSITORY:${{ github.run_number }} || true
+        docker rmi $ECR_REPOSITORY:latest || true
+        docker system prune -f || true
